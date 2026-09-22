@@ -24,16 +24,29 @@ func main() {
 	}
 	log.Println("Berhasil terhubung ke database")
 
-	_ = db // Go menolak variabel tak terpakai, jadi ini penanda sementara.
+	if err := database.RunMigration(cfg.DATABASEURL); err != nil {
+		log.Fatal("gagal menjalankan migrasi: ", err)
+	}
 
 	server := gin.Default()
 
+	// /healthz mengecek database, bukan sekadar balas "ok".
 	server.GET("/healthz", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "OK"})
+		// Ambil *sql.DB dari handle GORM untuk ping.
+		sqlDB, err := db.DB()
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unavailable"})
+			return
+		}
+		// Ping pakai context milik request, jadi timeout klien ikut berlaku.
+		if err := sqlDB.PingContext(c.Request.Context()); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unavailable"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
 	if err := server.Run(":" + cfg.HTTPPort); err != nil {
 		log.Fatal("Server berhenti: ", err)
 	}
-
 }
