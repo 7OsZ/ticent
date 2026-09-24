@@ -4,8 +4,10 @@ import (
 	"log"
 	"net/http"
 
+	"ticent/internal/auth"
 	"ticent/internal/platform/config"
 	"ticent/internal/platform/database"
+	"ticent/internal/platform/httpx"
 
 	"github.com/gin-gonic/gin"
 )
@@ -17,17 +19,19 @@ func main() {
 		log.Fatal("Gagal memuat config", err)
 	}
 
-	// buka database. db bertipe *gorm.DB.
+	// Database
 	db, err := database.Open(cfg.DATABASEURL)
 	if err != nil {
 		log.Fatal("Gagal terhubung ke database", err)
 	}
 	log.Println("Berhasil terhubung ke database")
 
+	// Migration
 	if err := database.RunMigration(cfg.DATABASEURL); err != nil {
 		log.Fatal("gagal menjalankan migrasi: ", err)
 	}
 
+	// router
 	server := gin.Default()
 
 	// /healthz mengecek database, bukan sekadar balas "ok".
@@ -46,7 +50,22 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	// auth middleware
+	authMW := httpx.AuthRequired(cfg.JWTSecret)
+
+	// wiring auth
+	authRepo := auth.NewRepository(db)
+	authService := auth.NewService(authRepo, cfg.JWTSecret)
+	authHandler := auth.NewHandler(authService)
+	authHandler.RegisterRoutes(server, authMW)
+
+	// 8) shortcut: route uji admin, hapus di Modul 2 saat endpoint admin asli ada
+	server.GET("/admin/ping", authMW, httpx.RequireRole("admin"), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "admin ok"})
+	})
+
+	// 9) Jalankan server
 	if err := server.Run(":" + cfg.HTTPPort); err != nil {
-		log.Fatal("Server berhenti: ", err)
+		log.Fatal("server berhenti: ", err)
 	}
 }

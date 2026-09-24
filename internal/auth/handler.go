@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"net/http"
+	"ticent/internal/platform/httpx"
 
 	"github.com/gin-gonic/gin"
 )
@@ -64,4 +65,49 @@ func (h *Handler) Register(c *gin.Context) {
 	}
 	// sukses
 	c.JSON(http.StatusCreated, user)
+}
+
+func (h *Handler) Login(c *gin.Context) {
+	var req loginRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	token, err := h.service.Login(req.Email, req.Password)
+	if err != nil {
+		if errors.Is(err, ErrInvalidCredentials) {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Terjadi kesalahan",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"token": token,
+	})
+}
+
+// Me
+func (h *Handler) Me(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"user_id": httpx.UserID(c),
+		"role":    httpx.Role(c),
+	})
+}
+
+// RegisterRoutes sekarang menerima middleware auth dari luar.
+func (h *Handler) RegisterRoutes(r *gin.Engine, authMW gin.HandlerFunc) {
+	grp := r.Group("/auth")
+	grp.POST("/register", h.Register)
+	grp.POST("/login", h.Login)
+	grp.GET("/me", authMW, h.Me) // authMW jalan dulu, baru Me
 }

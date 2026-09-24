@@ -12,6 +12,7 @@ import (
 type Config struct {
 	HTTPPort    string
 	DATABASEURL string
+	JWTSecret   string
 }
 
 // Load membaca .env lalu environment, dan mengembalikan Config.

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -84,7 +85,7 @@ func (s *Service) Login(email, password string) (string, error) {
 func (s *Service) GenerateToken(user *User) (string, error) {
 	// claims = isitoken. Mapclaims = map sederhana
 	claims := jwt.MapClaims{
-		"sub":  user.ID,
+		"sub":  strconv.FormatInt(user.ID, 10),
 		"role": user.Role,
 		"exp":  time.Now().Add(24 * time.Hour).Unix(),
 		"iat":  time.Now().Unix(),
