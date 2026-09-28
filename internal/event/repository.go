@@ -74,7 +74,7 @@ func (r *Repository) ListCatalog(today string) ([]EventDay, error) {
 	err := r.db.
 		// Ambil hanya kolom dari tabel event_days.
 		Select("event_days.*").
-		// Gabungkan dengan tabel events supaya kita bisa mengecek status event
+		// Gabungkan dengan tabel events supaya bisa mengecek status event
 		Joins("JOIN events ON events.id = event_days.event_id").
 		Where("events.status = ? AND event_days.show_date >= ?", "published", today).
 		// Ikut ambil data event

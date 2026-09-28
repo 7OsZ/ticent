@@ -9,6 +9,7 @@ import (
 )
 
 func Open(dsn string) (*gorm.DB, error) {
+	// true membuat GORM mengubah error khas PostgreSQL menjadi error GORM yang mudah dicek.
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{TranslateError: true})
 	if err != nil {
 		return nil, err
