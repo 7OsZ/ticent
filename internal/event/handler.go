@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"ticent/internal/platform/httpx"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -31,7 +32,7 @@ type createEventRequest struct {
 // addDayRequest = bentuk JSON untuk menambah hari
 type addDayRequest struct {
 	Label    string `json:"label" binding:"required"`
-	ShowDate string `json:"show_date" binding:"required"` // dibaca service sebagai YYYY-MM-DD
+	ShowDate string `json:"show_date" binding:"required"`
 }
 
 // addCategoryRequest = bentuk JSON untuk menambah jenis tiket.
@@ -128,6 +129,64 @@ func (h *Handler) AddCategory(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, cat)
+}
+
+// Publish: POST /admin/events/:id/publish
+func (h *Handler) Publish(c *gin.Context) {
+	eventID, ok := parseID(c)
+	if !ok {
+		return
+	}
+
+	if err := h.service.Publish(eventID); err != nil {
+		writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"status": "published",
+	})
+}
+
+// ListCatalog: GET /catalog (publik, tanpa login)
+func (h *Handler) ListCatalog(c *gin.Context) {
+	days, err := h.service.ListCatalog()
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+
+	if days == nil {
+		days = []EventDay{}
+	}
+	c.JSON(http.StatusOK, days)
+}
+
+// GetCatalogDay: GET /catalog/:id (publik). :id = ID hari
+func (h *Handler) GetCatalogDay(c *gin.Context) {
+	dayID, ok := parseID(c)
+	if !ok {
+		return
+	}
+
+	d, err := h.service.GetCatalogDay(dayID)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, d)
+}
+
+// ROUTES
+func (h *Handler) RegisterRoutes(r *gin.Engine, authMW gin.HandlerFunc) {
+	admin := r.Group("/admin", authMW, httpx.RequireRole("admin"))
+	admin.POST("/events", h.CreateEvent)
+	admin.POST("/events/:id/days", h.AddDay)
+	admin.POST("/days/:id/categories", h.AddCategory)
+	admin.POST("/events/:id/publish", h.Publish)
+
+	// Katalog terbuka untuk siapa saja, tanpa login.
+	r.GET("/catalog", h.ListCatalog)
+	r.GET("/catalog/:id", h.GetCatalogDay)
 }
 
 // parseID membaca :id dari URL dan mengubahnya menjadi angka.

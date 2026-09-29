@@ -98,7 +98,7 @@ func (s *Service) AddDay(eventID int64, label, showDate string) (*EventDay, erro
 		return nil, fmt.Errorf("%w: Label hari wajib diisi", ErrValidation)
 	}
 	// Ubah teks "2026-02-05" jadi tanggal.
-	date, err := time.Parse("2026-01-02", showDate)
+	date, err := time.Parse("2006-01-02", showDate)
 	if err != nil {
 		return nil, fmt.Errorf("%w: Format tanggal harus YYYY-MM-DD", ErrValidation)
 	}

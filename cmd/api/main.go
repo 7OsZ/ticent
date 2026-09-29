@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"ticent/internal/auth"
+	"ticent/internal/event"
 	"ticent/internal/platform/config"
 	"ticent/internal/platform/database"
 	"ticent/internal/platform/httpx"
@@ -58,6 +59,11 @@ func main() {
 	authService := auth.NewService(authRepo, cfg.JWTSecret)
 	authHandler := auth.NewHandler(authService)
 	authHandler.RegisterRoutes(server, authMW)
+
+	eventRepo := event.NewRepository(db)
+	eventService := event.NewService(eventRepo)
+	eventHandler := event.NewHandler(eventService)
+	eventHandler.RegisterRoutes(server, authMW)
 
 	// 8) shortcut: route uji admin, hapus di Modul 2 saat endpoint admin asli ada
 	server.GET("/admin/ping", authMW, httpx.RequireRole("admin"), func(c *gin.Context) {
