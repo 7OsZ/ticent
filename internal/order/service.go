@@ -19,6 +19,7 @@ var (
 	ErrQuotaExceeded  = errors.New("Melebihi batas tiket per akun")      // jatah beli habis (409)
 	ErrSoldOut        = errors.New("Stok tidak cukup")                   // tiket habis (409)
 	ErrPendingExists  = errors.New("Masih ada order yang belum dibayar") // order pending lain di event ini (409)
+	ErrOrderNotFound  = errors.New("Order tidak ditemukan")              // tidak ada / bukan milik user ini (404)
 )
 
 // Service berisi aturan bisnis order.
@@ -160,4 +161,16 @@ func (s *Service) Checkout(userID int64, in CheckoutInput) (*Order, error) {
 		return nil, err
 	}
 	return order, nil
+}
+
+// GetOrder mengambil order milik user yang sedang login.
+func (s *Service) GetOrder(userID, orderID int64) (*Order, error) {
+	o, err := s.repo.FindUserOrder(userID, orderID)
+	if err != nil {
+		return nil, err
+	}
+	if o == nil {
+		return nil, ErrOrderNotFound
+	}
+	return o, nil
 }
