@@ -1,6 +1,7 @@
 package order
 
 import (
+	"cmp"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -108,9 +109,7 @@ func (s *Service) Checkout(userID int64, in CheckoutInput) (*Order, error) {
 	}
 
 	// Urutkan keranjang berdasarkan ID kategori, dari kecil ke besar.
-	slices.SortFunc(items, func(a, b OrderItem) int {
-		return int(a.CategoryID - b.CategoryID)
-	})
+	sortByCategory(items)
 
 	order := &Order{
 		UserID:          userID,
@@ -127,35 +126,30 @@ func (s *Service) Checkout(userID int64, in CheckoutInput) (*Order, error) {
 	err = s.repo.InTx(func(tx *gorm.DB) error {
 		// Jatah beli dulu, baru stok. Alasannya: baris kuota hanya milik user ini, jadi hampir tidak pernah rebutan. Kalau jatah sudah habis,
 		// kita langsung berhenti tanpa sempat menyentuh baris stok yang sedang diperebutkan ratusan orang.
+		if err := s.repo.CreateOrder(tx, order); err != nil {
+			if errors.Is(err, gorm.ErrDuplicatedKey) {
+				return ErrPendingExists
+			}
+			return err
+		}
 		ok, err := s.repo.ReserveQuota(tx, userID, ev.ID, total, ev.MaxTicketsPerUser)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return ErrQuotaExceeded
+			return ErrQuotaExceeded // order di langkah a ikut dibatalkan
 		}
-
-		// Kurangi stok tiap kategori, sesuai urutan yang sudah diurutkan tadi.
 		for _, it := range items {
 			ok, err := s.repo.DecrementStock(tx, it.CategoryID, it.Qty)
 			if err != nil {
 				return err
 			}
 			if !ok {
-				// Satu kategori kurang = seluruh checkout batal (termasuk jatah beli tadi).
+				// Satu kategori kurang = order, jatah beli, dan stok kategori lain ikut batal.
 				return fmt.Errorf("%w: %s", ErrSoldOut, cats[it.CategoryID].Name)
 			}
 		}
-
-		// Simpan order + isinya.
-		if err := s.repo.CreateOrder(tx, order); err != nil {
-			// Index "satu order pending per user per event" menolak order kedua.
-			if errors.Is(err, gorm.ErrDuplicatedKey) {
-				return ErrPendingExists
-			}
-			return err
-		}
-		return nil // semua berhasil -> commit
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -173,4 +167,78 @@ func (s *Service) GetOrder(userID, orderID int64) (*Order, error) {
 		return nil, ErrOrderNotFound
 	}
 	return o, nil
+}
+
+// sortByCategory mengurutkan isi order dari ID kategori terkecil ke terbesar.
+func sortByCategory(items []OrderItem) {
+	slices.SortFunc(items, func(a, b OrderItem) int {
+		return cmp.Compare(a.CategoryID, b.CategoryID)
+	})
+}
+
+const sweepBatch = 100
+
+func (s *Service) ExpireOverdue(now time.Time) (int, error) {
+	ids, err := s.repo.ListExpiredPendingIDs(now, sweepBatch)
+	if err != nil {
+		return 0, err
+	}
+
+	expired := 0
+	var errs []error // kumpulan error, supaya satu kegagalan tidak menghentikan yang lain
+	for _, id := range ids {
+		done, err := s.expireOne(id, now)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("order %d: %w", id, err))
+			continue // lanjut ke order berikutnya
+		}
+		if done {
+			expired++
+		}
+	}
+	// errors.Join menggabungkan semua error jadi satu. Hasilnya nil kalau tidak ada error.
+	return expired, errors.Join(errs...)
+}
+
+// expireOne menghanguskan SATU order dan mengembalikan tiket + jatah belinya,
+func (s *Service) expireOne(orderID int64, now time.Time) (bool, error) {
+	done := false
+	err := s.repo.InTx(func(tx *gorm.DB) error {
+		// a) Kunci order: ubah ke expired, hanya kalau masih pending dan sudah lewat waktu.
+		ok, err := s.repo.ExpireOrder(tx, orderID, now)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			// Order sudah dibayar atau sudah disapu duluan. Tidak ada yang perlu dikembalikan.
+			return nil
+		}
+
+		// Ambil isi order untuk tahu apa saja yang harus dikembalikan.
+		o, err := s.repo.FindOrderForRelease(tx, orderID)
+		if err != nil {
+			return err
+		}
+
+		// Kembalikan jatah beli (jumlah semua tiket di order ini).
+		total := 0
+		for _, it := range o.Items {
+			total += it.Qty
+		}
+		if err := s.repo.ReleaseQuota(tx, o.UserID, o.EventID, total); err != nil {
+			return err
+		}
+
+		// Kembalikan stok tiap kategori, dengan urutan ID yang sama seperti Checkout.
+		sortByCategory(o.Items)
+		for _, it := range o.Items {
+			if err := s.repo.IncrementStock(tx, it.CategoryID, it.Qty); err != nil {
+				return err
+			}
+		}
+
+		done = true
+		return nil // order expired, jatah dan stok kembali
+	})
+	return done, err
 }

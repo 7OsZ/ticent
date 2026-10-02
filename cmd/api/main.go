@@ -1,8 +1,13 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"time"
 
 	"ticent/internal/auth"
 	"ticent/internal/event"
@@ -71,13 +76,36 @@ func main() {
 	orderHandler := order.NewHandler(orderService)
 	orderHandler.RegisterRoutes(server, authMW)
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	go order.NewWorker(orderService, 30*time.Second).Run(ctx)
+
 	// 8) shortcut: route uji admin, hapus di Modul 2 saat endpoint admin asli ada
 	server.GET("/admin/ping", authMW, httpx.RequireRole("admin"), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "admin ok"})
 	})
 
 	// 9) Jalankan server
-	if err := server.Run(":" + cfg.HTTPPort); err != nil {
-		log.Fatal("server berhenti: ", err)
+	srv := &http.Server{
+		Addr:    ":" + cfg.HTTPPort,
+		Handler: server,
 	}
+
+	go func() {
+		log.Printf("server berjalan di port %s", cfg.HTTPPort)
+		// ErrServerClosed BUKAN masalah: itu tanda server dimatikan dengan sengaja.
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal("server berhenti: ", err)
+		}
+	}()
+
+	<-ctx.Done()
+	log.Println("mematikan server...")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Println("gagal mematikan server dengan rapi:", err)
+	}
+	log.Println("server mati")
 }
