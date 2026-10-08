@@ -229,6 +229,19 @@ func (s *Service) GetCatalogDay(dayID int64) (*EventDay, error) {
 	return d, nil
 }
 
+// GetPublishedEvent mengambil event yang sudah diumumkan (published).
+func (s *Service) GetPublishedEvent(id int64) (*Event, error) {
+	e, err := s.repo.FindEventByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if e == nil || e.Status != "published" {
+		return nil, ErrEventNotFound
+	}
+
+	return e, nil
+}
+
 // findDraftEvent mengambil event dan memastikan masih draft.
 func (s *Service) findDraftEvent(eventID int64) (*Event, error) {
 	e, err := s.repo.FindEventByID(eventID)

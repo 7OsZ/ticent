@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +16,7 @@ import (
 	"ticent/internal/platform/config"
 	"ticent/internal/platform/database"
 	"ticent/internal/platform/httpx"
+	"ticent/internal/queue"
 
 	"github.com/gin-gonic/gin"
 )
@@ -71,14 +73,21 @@ func main() {
 	eventHandler := event.NewHandler(eventService)
 	eventHandler.RegisterRoutes(server, authMW)
 
+	queueRepo := queue.NewRepository(db)
+	queueService := queue.NewService(queueRepo, eventService)
+	queueHandler := queue.NewHandler(queueService)
+	queueHandler.RegisterRoutes(server, authMW)
+
+	// order memakai repository antrean untuk gerbang checkout (arah order -> queue).
 	orderRepo := order.NewRepository(db)
-	orderService := order.NewService(orderRepo, eventService)
+	orderService := order.NewService(orderRepo, eventService, queueRepo)
 	orderHandler := order.NewHandler(orderService)
 	orderHandler.RegisterRoutes(server, authMW)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	go order.NewWorker(orderService, 30*time.Second).Run(ctx)
+	go queue.NewWorker(queueService, queue.WorkerInterval).Run(ctx)
 
 	// 8) shortcut: route uji admin, hapus di Modul 2 saat endpoint admin asli ada
 	server.GET("/admin/ping", authMW, httpx.RequireRole("admin"), func(c *gin.Context) {
@@ -89,6 +98,9 @@ func main() {
 	srv := &http.Server{
 		Addr:    ":" + cfg.HTTPPort,
 		Handler: server,
+		// Context setiap request diturunkan dari ctx. Saat Ctrl+C, koneksi SSE antrean
+		// ikut berhenti, sehingga Shutdown tidak menunggu aliran yang tidak pernah selesai.
+		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
 
 	go func() {

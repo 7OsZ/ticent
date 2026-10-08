@@ -3,3 +3,7 @@ tmp/
 *.exe
 *.test
 *.out
+CLAUDE.md
+docs/PRD.md
+docs/TASKS.md
+.claude/skills/product-engineering-orchestrator

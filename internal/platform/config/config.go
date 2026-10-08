@@ -32,5 +32,12 @@ func Load() (Config, error) {
 		port = "8080"
 	}
 
-	return Config{HTTPPort: port, DATABASEURL: dbURL}, nil
+	// Tanpa secret, token ditandatangani dengan kunci kosong:
+	// siapa pun bisa membuat token admin palsu. Lebih baik server menolak start.
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		return Config{}, errors.New("JWT_SECRET belum diisi")
+	}
+
+	return Config{HTTPPort: port, DATABASEURL: dbURL, JWTSecret: jwtSecret}, nil
 }

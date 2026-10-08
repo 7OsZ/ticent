@@ -95,14 +95,13 @@ func writeError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, ErrValidation):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()}) // 400: isi keranjang salah
-	case errors.Is(err, ErrDayNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()}) // 404: hari tidak tersedia
 	case errors.Is(err, ErrSaleNotStarted),
 		errors.Is(err, ErrQuotaExceeded),
 		errors.Is(err, ErrSoldOut),
-		errors.Is(err, ErrPendingExists):
+		errors.Is(err, ErrPendingExists),
+		errors.Is(err, ErrNotAdmitted):
 		// 409 = permintaannya masuk akal, tapi bentrok dengan kondisi saat ini
-		// (belum jam war, jatah habis, tiket habis, masih ada order belum bayar).
+		// (belum jam war, jatah habis, tiket habis, masih ada order belum bayar, belum lolos antrean).
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 	case errors.Is(err, ErrDayNotFound), errors.Is(err, ErrOrderNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()}) // 404: data tidak ada

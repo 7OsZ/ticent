@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"ticent/internal/event"
+	"ticent/internal/queue"
 	"time"
 
 	"gorm.io/gorm"
@@ -14,23 +15,25 @@ import (
 
 // Daftar error bisnis Checkout. Handler memakai ini untuk memilih status HTTP.
 var (
-	ErrValidation     = errors.New("Validasi gagal")                     // isi keranjang salah (400)
-	ErrDayNotFound    = errors.New("Hari tidak tersedia")                // hari tidak ada / belum publish / sudah lewat (404)
-	ErrSaleNotStarted = errors.New("Penjualan belum dibuka")             // belum jam war (409)
-	ErrQuotaExceeded  = errors.New("Melebihi batas tiket per akun")      // jatah beli habis (409)
-	ErrSoldOut        = errors.New("Stok tidak cukup")                   // tiket habis (409)
-	ErrPendingExists  = errors.New("Masih ada order yang belum dibayar") // order pending lain di event ini (409)
-	ErrOrderNotFound  = errors.New("Order tidak ditemukan")              // tidak ada / bukan milik user ini (404)
+	ErrValidation     = errors.New("Validasi gagal")                                         // isi keranjang salah (400)
+	ErrDayNotFound    = errors.New("Hari tidak tersedia")                                    // hari tidak ada / belum publish / sudah lewat (404)
+	ErrSaleNotStarted = errors.New("Penjualan belum dibuka")                                 // belum jam war (409)
+	ErrQuotaExceeded  = errors.New("Melebihi batas tiket per akun")                          // jatah beli habis (409)
+	ErrSoldOut        = errors.New("Stok tidak cukup")                                       // tiket habis (409)
+	ErrPendingExists  = errors.New("Masih ada order yang belum dibayar")                     // order pending lain di event ini (409)
+	ErrOrderNotFound  = errors.New("Order tidak ditemukan")                                  // tidak ada / bukan milik user ini (404)
+	ErrNotAdmitted    = errors.New("Kamu belum lolos antrean atau sesi belanja sudah habis") // (409)
 )
 
 // Service berisi aturan bisnis order.
 type Service struct {
-	repo   *Repository    // query order, stok, dan kuota
-	events *event.Service // untuk membaca hari + kategori + batas tiket
+	repo   *Repository       // query order, stok, dan kuota
+	events *event.Service    // untuk membaca hari + kategori + batas tiket
+	queue  *queue.Repository // gerbang antrean: hanya yang sudah lolos boleh checkout
 }
 
-func NewService(repo *Repository, events *event.Service) *Service {
-	return &Service{repo: repo, events: events}
+func NewService(repo *Repository, events *event.Service, queueRepo *queue.Repository) *Service {
+	return &Service{repo: repo, events: events, queue: queueRepo}
 }
 
 // ItemInput = satu baris keranjang. Contoh: kategori VIP, 2 tiket.
@@ -122,22 +125,34 @@ func (s *Service) Checkout(userID int64, in CheckoutInput) (*Order, error) {
 		Items:           items,
 	}
 
-	// Satu paket transaksi: jatah beli, stok, dan order.
+	// Satu paket transaksi: order, antrean, jatah beli, lalu stok.
+	// Urutan ini sama di checkout, sweeper, dan pembayaran (D-24), supaya tidak deadlock.
+	// Baris yang paling diperebutkan (stok kategori) disentuh paling akhir:
+	// kalau user ternyata belum lolos antrean atau jatahnya habis, kita berhenti
+	// tanpa sempat mengunci stok yang sedang diincar ratusan orang.
 	err = s.repo.InTx(func(tx *gorm.DB) error {
-		// Jatah beli dulu, baru stok. Alasannya: baris kuota hanya milik user ini, jadi hampir tidak pernah rebutan. Kalau jatah sudah habis,
-		// kita langsung berhenti tanpa sempat menyentuh baris stok yang sedang diperebutkan ratusan orang.
 		if err := s.repo.CreateOrder(tx, order); err != nil {
 			if errors.Is(err, gorm.ErrDuplicatedKey) {
 				return ErrPendingExists
 			}
 			return err
 		}
+		// Gerbang antrean: harus sedang belanja (active) dan sesinya belum habis.
+		// Berhasil = status jadi checkout dan slot langsung lepas untuk nomor berikutnya.
+		// Kalau langkah sesudahnya gagal (mis. stok habis), transaksi batal dan status kembali active.
+		admitted, err := s.queue.EnterCheckout(tx, userID, ev.ID, now)
+		if err != nil {
+			return err
+		}
+		if !admitted {
+			return ErrNotAdmitted
+		}
 		ok, err := s.repo.ReserveQuota(tx, userID, ev.ID, total, ev.MaxTicketsPerUser)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return ErrQuotaExceeded // order di langkah a ikut dibatalkan
+			return ErrQuotaExceeded // order dan status antrean ikut dibatalkan
 		}
 		for _, it := range items {
 			ok, err := s.repo.DecrementStock(tx, it.CategoryID, it.Qty)
@@ -217,6 +232,11 @@ func (s *Service) expireOne(orderID int64, now time.Time) (bool, error) {
 		// Ambil isi order untuk tahu apa saja yang harus dikembalikan.
 		o, err := s.repo.FindOrderForRelease(tx, orderID)
 		if err != nil {
+			return err
+		}
+
+		// Tutup entri antrean: user harus antre ulang untuk mencoba lagi (D-08).
+		if err := s.queue.FinishCheckout(tx, o.UserID, o.EventID, queue.StatusExpired); err != nil {
 			return err
 		}
 
