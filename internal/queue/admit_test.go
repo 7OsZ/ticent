@@ -97,3 +97,37 @@ func TestQueueSimulation(t *testing.T) {
 		 GROUP BY user_id HAVING COUNT(*) > 1) d`, seed.EventID).Scan(&dup).Error)
 	require.Zero(t, dup, "ada user dengan dua entri hidup")
 }
+
+func TestPresenceThrottlesTouchWrites(t *testing.T) {
+	db := testutil.DB(t)
+	seed := testutil.SeedEvent(t, db, 10, 50)
+	ids := testutil.SeedUsers(t, db, 1)
+	uid := ids[0]
+
+	repo := queue.NewRepository(db)
+	svc := queue.NewService(repo, event.NewService(event.NewRepository(db)))
+
+	recent := time.Now().Add(-5 * time.Second).Round(time.Microsecond)
+	require.NoError(t, repo.CreateEntry(&queue.Entry{
+		EventID: seed.EventID, UserID: uid, Status: queue.StatusWaiting,
+		JoinedAt: recent, LastSeenAt: recent,
+	}))
+
+	// Baru 5 detik sejak heartbeat terakhir (< 20 detik): Presence tidak perlu UPDATE ke DB.
+	_, err := svc.Presence(uid, seed.EventID)
+	require.NoError(t, err)
+
+	var seen time.Time
+	require.NoError(t, db.Raw(`SELECT last_seen_at FROM queue_entries WHERE user_id = ?`, uid).Scan(&seen).Error)
+	require.True(t, seen.Equal(recent), "last_seen_at tidak boleh di-update tiap tick 2 detik")
+
+	// Sudah 25 detik (>= 20 detik): Presence wajib memperbarui last_seen_at sebelum timeout 60 detik.
+	stale := time.Now().Add(-25 * time.Second).Round(time.Microsecond)
+	require.NoError(t, db.Exec(`UPDATE queue_entries SET last_seen_at = ? WHERE user_id = ?`, stale, uid).Error)
+
+	_, err = svc.Presence(uid, seed.EventID)
+	require.NoError(t, err)
+
+	require.NoError(t, db.Raw(`SELECT last_seen_at FROM queue_entries WHERE user_id = ?`, uid).Scan(&seen).Error)
+	require.True(t, seen.After(stale), "last_seen_at wajib diperbarui saat melewati batas throttle")
+}

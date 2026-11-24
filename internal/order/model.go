@@ -18,7 +18,9 @@ type Order struct {
 	Status          string    `json:"status"`
 	TotalAmount     int64     `json:"total_amount"`      // total rupiah
 	MidtransOrderID string    `json:"midtrans_order_id"` // kode unik untuk Midtrans
-	HoldExpiresAt   time.Time `json:"hold_expires_at"`   // frontend memakai ini untuk hitung mundur
+	SnapToken       *string   `json:"snap_token,omitempty"`
+	SnapRedirectURL *string   `json:"snap_redirect_url,omitempty"`
+	HoldExpiresAt   time.Time `json:"hold_expires_at"` // frontend memakai ini untuk hitung mundur
 	// Pointer karena boleh kosong: order yang belum dibayar tidak punya waktu bayar.
 	PaidAt    *time.Time `json:"paid_at"`
 	CreatedAt time.Time  `json:"created_at"`

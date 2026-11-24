@@ -2,9 +2,8 @@ package event
 
 import (
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
-	"strconv"
 	"ticent/internal/platform/httpx"
 	"time"
 
@@ -23,6 +22,7 @@ func NewHandler(service *Service) *Handler {
 type createEventRequest struct {
 	Name              string    `json:"name" binding:"required"`
 	Venue             string    `json:"venue" binding:"required"`
+	PosterURL         *string   `json:"poster_url"`
 	SaleStartsAt      time.Time `json:"sale_starts_at" binding:"required"`
 	MaxActiveSessions *int      `json:"max_active_sessions"`
 	MaxTicketsPerUser *int      `json:"max_tickets_per_user"`
@@ -60,6 +60,7 @@ func (h *Handler) CreateEvent(c *gin.Context) {
 	e, err := h.service.CreateEvent(CreateEventInput{
 		Name:              req.Name,
 		Venue:             req.Venue,
+		PosterURL:         req.PosterURL,
 		SaleStartAt:       req.SaleStartsAt,
 		MaxActiveSessions: req.MaxActiveSessions,
 		MaxTicketsPerUser: req.MaxTicketsPerUser,
@@ -75,7 +76,7 @@ func (h *Handler) CreateEvent(c *gin.Context) {
 // AddDay: POST /admin/events/:id/days
 func (h *Handler) AddDay(c *gin.Context) {
 	// :id di URL adalah ID event.
-	eventID, ok := parseID(c)
+	eventID, ok := httpx.ParseID(c)
 	if !ok {
 		return
 	}
@@ -99,7 +100,7 @@ func (h *Handler) AddDay(c *gin.Context) {
 
 // AddCategory: POST /admin/days/:id/categories
 func (h *Handler) AddCategory(c *gin.Context) {
-	dayID, ok := parseID(c)
+	dayID, ok := httpx.ParseID(c)
 	if !ok {
 		return
 	}
@@ -133,7 +134,7 @@ func (h *Handler) AddCategory(c *gin.Context) {
 
 // Publish: POST /admin/events/:id/publish
 func (h *Handler) Publish(c *gin.Context) {
-	eventID, ok := parseID(c)
+	eventID, ok := httpx.ParseID(c)
 	if !ok {
 		return
 	}
@@ -163,7 +164,7 @@ func (h *Handler) ListCatalog(c *gin.Context) {
 
 // GetCatalogDay: GET /catalog/:id (publik). :id = ID hari
 func (h *Handler) GetCatalogDay(c *gin.Context) {
-	dayID, ok := parseID(c)
+	dayID, ok := httpx.ParseID(c)
 	if !ok {
 		return
 	}
@@ -189,17 +190,6 @@ func (h *Handler) RegisterRoutes(r *gin.Engine, authMW gin.HandlerFunc) {
 	r.GET("/catalog/:id", h.GetCatalogDay)
 }
 
-// parseID membaca :id dari URL dan mengubahnya menjadi angka.
-func parseID(c *gin.Context) (int64, bool) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "ID tidak valid",
-		})
-	}
-	return id, true
-}
-
 // writeError memilih status HTTP yang tepat untuk setiap error dari service. Disatukan di sini supaya setiap handler tidak menulis ulang aturan yang sama.
 func writeError(c *gin.Context, err error) {
 	switch {
@@ -214,7 +204,7 @@ func writeError(c *gin.Context, err error) {
 			"error": err.Error()}) // 409: bentrok dengan kondisi data
 	default:
 		// Error tak terduga (mis. database putus). Detailnya dicatat di server, tapi TIDAK dikirim ke klien supaya info internal tidak bocor.
-		log.Println("error tak terduga:", err)
+		slog.Error("error tak terduga", "err", err, "request_id", httpx.RequestIDFrom(c))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "terjadi kesalahan"})
 	}

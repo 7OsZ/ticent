@@ -3,6 +3,7 @@
 package testutil
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,10 @@ import (
 	"github.com/joho/godotenv"
 	"gorm.io/gorm"
 )
+
+// testAdvisoryLockKey menyerikan go test antar-package yang berbagi satu TEST_DATABASE_URL,
+// supaya TRUNCATE di package A tidak menghapus data package B yang sedang jalan paralel.
+const testAdvisoryLockKey = 842367
 
 // DB membuka database test yang sudah dimigrasi dan dikosongkan.
 // Test dilewati (skip) kalau TEST_DATABASE_URL belum diisi.
@@ -35,24 +40,39 @@ func DB(t *testing.T) *gorm.DB {
 		t.Fatal("TEST_DATABASE_URL sama dengan DATABASE_URL; test akan menghapus data dev")
 	}
 
-	// Migrasi membaca file://migrations (path relatif), jadi jalankan dari root repo.
-	t.Chdir(root)
-	if err := database.RunMigration(dsn); err != nil {
-		t.Fatal("migrasi test gagal:", err)
-	}
-
 	db, err := database.Open(dsn)
 	if err != nil {
 		t.Fatal("koneksi database test gagal:", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal("ambil sql.DB gagal:", err)
+	}
+
+	ctx := context.Background()
+	lockConn, err := sqlDB.Conn(ctx)
+	if err != nil {
+		_ = sqlDB.Close()
+		t.Fatal("pin koneksi lock gagal:", err)
+	}
+	if _, err := lockConn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", testAdvisoryLockKey); err != nil {
+		_ = lockConn.Close()
+		_ = sqlDB.Close()
+		t.Fatal("kunci database test gagal:", err)
+	}
+
 	t.Cleanup(func() {
-		if sqlDB, err := db.DB(); err == nil {
-			sqlDB.Close()
-		}
+		_, _ = lockConn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", testAdvisoryLockKey)
+		_ = lockConn.Close()
+		_ = sqlDB.Close()
 	})
 
+	if err := database.RunMigration(dsn); err != nil {
+		t.Fatal("migrasi test gagal:", err)
+	}
+
 	err = db.Exec(`TRUNCATE users, events, event_days, categories, user_event_quota,
-		orders, order_items, queue_entries RESTART IDENTITY CASCADE`).Error
+		orders, order_items, queue_entries, tickets RESTART IDENTITY CASCADE`).Error
 	if err != nil {
 		t.Fatal("gagal mengosongkan database test:", err)
 	}

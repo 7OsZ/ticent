@@ -132,3 +132,56 @@ func (r *Repository) ReleaseQuota(tx *gorm.DB, userID, eventID int64, qty int) e
 		qty, userID, eventID,
 	).Error
 }
+
+// FindByMidtransID mencari order berdasarkan kode Midtrans lengkap dengan daftar itemnya (dipakai webhook & sync).
+func (r *Repository) FindByMidtransID(midtransOrderID string) (*Order, error) {
+	var o Order
+	err := r.db.Preload("Items").Where("midtrans_order_id = ?", midtransOrderID).First(&o).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &o, nil
+}
+
+// SaveSnapToken menyimpan token Snap hanya bila order masih pending dan belum pernah punya token (idempoten).
+func (r *Repository) SaveSnapToken(orderID int64, token, redirectURL string) (bool, error) {
+	res := r.db.Exec(
+		`UPDATE orders SET snap_token = ?, snap_redirect_url = ?
+		  WHERE id = ? AND status = ? AND snap_token IS NULL`,
+		token, redirectURL, orderID, StatusPending,
+	)
+	return res.RowsAffected == 1, res.Error
+}
+
+// MarkPaid mengunci dan melunasi order secara atomik bila masih berstatus pending.
+func (r *Repository) MarkPaid(tx *gorm.DB, midtransOrderID string, now time.Time) (bool, error) {
+	res := tx.Exec(
+		`UPDATE orders SET status = ?, paid_at = ?
+		  WHERE midtrans_order_id = ? AND status = ?`,
+		StatusPaid, now, midtransOrderID, StatusPending,
+	)
+	return res.RowsAffected == 1, res.Error
+}
+
+// MarkFailedFromPending mengubah order pending menjadi failed saat pembayaran ditolak/batal.
+func (r *Repository) MarkFailedFromPending(tx *gorm.DB, midtransOrderID string) (bool, error) {
+	res := tx.Exec(
+		`UPDATE orders SET status = ?
+		  WHERE midtrans_order_id = ? AND status = ?`,
+		StatusFailed, midtransOrderID, StatusPending,
+	)
+	return res.RowsAffected == 1, res.Error
+}
+
+// MarkFailedFromExpired menandai failed bila pembayaran terlambat masuk setelah hold hangus (FR-P3).
+func (r *Repository) MarkFailedFromExpired(midtransOrderID string) (bool, error) {
+	res := r.db.Exec(
+		`UPDATE orders SET status = ?
+		  WHERE midtrans_order_id = ? AND status = ?`,
+		StatusFailed, midtransOrderID, StatusExpired,
+	)
+	return res.RowsAffected == 1, res.Error
+}

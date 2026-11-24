@@ -21,6 +21,7 @@ func Open(dsn string) (*gorm.DB, error) {
 	}
 
 	sqlDB.SetMaxOpenConns(20)
+	sqlDB.SetMaxIdleConns(20)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

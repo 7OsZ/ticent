@@ -2,9 +2,8 @@ package order
 
 import (
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
-	"strconv"
 	"ticent/internal/platform/httpx"
 
 	"github.com/gin-gonic/gin"
@@ -65,11 +64,8 @@ func (h *Handler) Checkout(c *gin.Context) {
 
 // GetOrder: GET /orders/:id (wajib login)
 func (h *Handler) GetOrder(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "ID tidak valid",
-		})
+	id, ok := httpx.ParseID(c)
+	if !ok {
 		return
 	}
 
@@ -108,7 +104,7 @@ func writeError(c *gin.Context, err error) {
 	default:
 		// Error tak terduga (mis. database putus): dicatat di server,
 		// tidak dikirim ke klien supaya info internal tidak bocor.
-		log.Println("error tak terduga:", err)
+		slog.Error("error tak terduga", "err", err, "request_id", httpx.RequestIDFrom(c))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "terjadi kesalahan"})
 	}
 }

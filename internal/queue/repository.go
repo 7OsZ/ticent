@@ -190,7 +190,7 @@ func (r *Repository) CountActive(tx *gorm.DB, eventID int64) (int64, error) {
 
 // Admit meloloskan paling banyak limit orang dengan nomor terkecil.
 // Mengembalikan nomor-nomor yang lolos, mis. [101, 102, 104] (103 sudah keluar).
-func (r *Repository) Admit(tx *gorm.DB, eventID int64, limit int, now, sessionEnd time.Time) ([]int, error) {
+func (r *Repository) Admit(tx *gorm.DB, eventID int64, limit int64, now, sessionEnd time.Time) ([]int, error) {
 	var positions []int
 	err := tx.Raw(
 		`WITH next AS (

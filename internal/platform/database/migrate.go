@@ -2,25 +2,33 @@ package database
 
 import (
 	"errors"
-	"log"
+	"log/slog"
+
+	"ticent/migrations"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
 func RunMigration(dsn string) error {
-	m, err := migrate.New("file://migrations", dsn)
+	src, err := iofs.New(migrations.Files, ".")
 	if err != nil {
 		return err
 	}
 
-	defer m.Close()
+	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = m.Close()
+	}()
 
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return err
 	}
 
-	log.Println("Migrate database selesai")
+	slog.Info("migrasi database selesai")
 	return nil
 }

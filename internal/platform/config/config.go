@@ -2,7 +2,7 @@ package config
 
 import (
 	"errors"
-	"log"
+	"log/slog"
 	"os"
 
 	"github.com/joho/godotenv"
@@ -10,15 +10,18 @@ import (
 
 // config tampung semua nilai dari env
 type Config struct {
-	HTTPPort    string
-	DATABASEURL string
-	JWTSecret   string
+	HTTPPort             string
+	DATABASEURL          string
+	JWTSecret            string
+	MidtransServerKey    string
+	MidtransClientKey    string
+	MidtransIsProduction bool
 }
 
 // Load membaca .env lalu environment, dan mengembalikan Config.
 func Load() (Config, error) {
 	if err := godotenv.Load(); err != nil {
-		log.Println("Warning: .env tidak ditemukan")
+		slog.Debug(".env tidak ditemukan, memakai environment sistem")
 	}
 
 	// os.Getenv mengembalikan "" kalau variabel tidak ada.
@@ -39,5 +42,18 @@ func Load() (Config, error) {
 		return Config{}, errors.New("JWT_SECRET belum diisi")
 	}
 
-	return Config{HTTPPort: port, DATABASEURL: dbURL, JWTSecret: jwtSecret}, nil
+	// Kunci server Midtrans wajib ada supaya tanda tangan webhook tidak bisa dipalsukan dengan kunci kosong.
+	midtransServerKey := os.Getenv("MIDTRANS_SERVER_KEY")
+	if midtransServerKey == "" {
+		return Config{}, errors.New("MIDTRANS_SERVER_KEY belum diisi")
+	}
+
+	return Config{
+		HTTPPort:             port,
+		DATABASEURL:          dbURL,
+		JWTSecret:            jwtSecret,
+		MidtransServerKey:    midtransServerKey,
+		MidtransClientKey:    os.Getenv("MIDTRANS_CLIENT_KEY"),
+		MidtransIsProduction: os.Getenv("MIDTRANS_IS_PRODUCTION") == "true",
+	}, nil
 }

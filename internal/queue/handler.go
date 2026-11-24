@@ -3,9 +3,8 @@ package queue
 import (
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
-	"strconv" // ubah ID di URL (teks) jadi angka
 	"time"
 
 	"ticent/internal/platform/httpx" // baca ID user dari token
@@ -23,7 +22,7 @@ func NewHandler(service *Service) *Handler {
 
 // Join: POST /events/:id/queue (wajib login). :id = ID event, mis. BMTH.
 func (h *Handler) Join(c *gin.Context) {
-	eventID, ok := parseEventID(c)
+	eventID, ok := httpx.ParseID(c)
 	if !ok {
 		return
 	}
@@ -39,7 +38,7 @@ func (h *Handler) Join(c *gin.Context) {
 
 // Me: GET /events/:id/queue/me (wajib login). Posisi saya di antrean.
 func (h *Handler) Me(c *gin.Context) {
-	eventID, ok := parseEventID(c)
+	eventID, ok := httpx.ParseID(c)
 	if !ok {
 		return
 	}
@@ -54,7 +53,7 @@ func (h *Handler) Me(c *gin.Context) {
 
 // Heartbeat: POST /events/:id/queue/heartbeat (wajib login). "Saya masih di sini."
 func (h *Handler) Heartbeat(c *gin.Context) {
-	eventID, ok := parseEventID(c)
+	eventID, ok := httpx.ParseID(c)
 	if !ok {
 		return
 	}
@@ -69,7 +68,7 @@ func (h *Handler) Heartbeat(c *gin.Context) {
 
 // Leave: DELETE /events/:id/queue (wajib login). Keluar dari antrean.
 func (h *Handler) Leave(c *gin.Context) {
-	eventID, ok := parseEventID(c)
+	eventID, ok := httpx.ParseID(c)
 	if !ok {
 		return
 	}
@@ -85,7 +84,7 @@ func (h *Handler) Leave(c *gin.Context) {
 // koneksi dibiarkan terbuka, server mengirim posisi terbaru setiap SSEInterval.
 // Selama koneksi terbuka, user dianggap hadir (tidak perlu heartbeat terpisah).
 func (h *Handler) Stream(c *gin.Context) {
-	eventID, ok := parseEventID(c)
+	eventID, ok := httpx.ParseID(c)
 	if !ok {
 		return
 	}
@@ -112,7 +111,7 @@ func (h *Handler) Stream(c *gin.Context) {
 			case <-ticker.C:
 			}
 			if v, err = h.service.Presence(userID, eventID); err != nil {
-				log.Println("stream antrean error:", err)
+				slog.Error("stream antrean error", "err", err, "request_id", httpx.RequestIDFrom(c))
 				return false
 			}
 		}
@@ -137,16 +136,6 @@ func (h *Handler) RegisterRoutes(r *gin.Engine, authMW gin.HandlerFunc) {
 	r.GET("/events/:id/queue/stream", authMW, h.Stream)
 }
 
-// parseEventID membaca :id dari URL. Tidak valid = langsung dijawab 400.
-func parseEventID(c *gin.Context) (int64, bool) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "id tidak valid"})
-		return 0, false
-	}
-	return id, true
-}
-
 // writeError memilih status HTTP untuk setiap error dari service.
 func writeError(c *gin.Context, err error) {
 	switch {
@@ -156,7 +145,7 @@ func writeError(c *gin.Context, err error) {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 	default:
 		// Error tak terduga: dicatat di server, tidak dibocorkan ke klien.
-		log.Println("error tak terduga:", err)
+		slog.Error("error tak terduga", "err", err, "request_id", httpx.RequestIDFrom(c))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "terjadi kesalahan"})
 	}
 }

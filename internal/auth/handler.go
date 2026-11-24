@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"ticent/internal/platform/httpx"
 
@@ -19,13 +20,13 @@ func NewHandler(service *Service) *Handler {
 
 // registerRequest
 type registerRequest struct {
-	Email    string `json:"email" binding:"required,email"`
+	Email    string `json:"email" binding:"required"`
 	FullName string `json:"full_name" binding:"required"`
 	Password string `json:"password" binding:"required,min=8"`
 }
 
 type loginRequest struct {
-	Email    string `json:"email" binding:"required,email"`
+	Email    string `json:"email" binding:"required"`
 	Password string `json:"password" binding:"required"`
 }
 
@@ -50,16 +51,17 @@ func (h *Handler) Register(c *gin.Context) {
 			})
 			return
 		}
-		// Password pendek
-		if errors.Is(err, ErrPasswordTooShort) {
+		// Input tidak valid (nama kosong, email salah, password < 8 atau > 72 byte)
+		if errors.Is(err, ErrPasswordTooShort) || errors.Is(err, ErrValidation) {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": err.Error(),
 			})
 			return
 		}
 		// Error tdk terduga
+		slog.Error("error tak terduga", "err", err, "request_id", httpx.RequestIDFrom(c))
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Terjadi kesalahan",
+			"error": "terjadi kesalahan",
 		})
 		return
 	}
@@ -85,8 +87,9 @@ func (h *Handler) Login(c *gin.Context) {
 			})
 			return
 		}
+		slog.Error("error tak terduga", "err", err, "request_id", httpx.RequestIDFrom(c))
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Terjadi kesalahan",
+			"error": "terjadi kesalahan",
 		})
 		return
 	}

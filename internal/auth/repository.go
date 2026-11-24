@@ -39,3 +39,16 @@ func (r *Repository) FindByEmail(email string) (*User, error) {
 
 	return &user, nil
 }
+
+// FindByID mencari user berdasarkan ID (dipakai modul pembayaran untuk mengisi nama & email pelanggan ke Midtrans).
+func (r *Repository) FindByID(id int64) (*User, error) {
+	var user User
+	err := r.db.First(&user, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}

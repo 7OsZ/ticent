@@ -77,19 +77,21 @@ func (s *Service) Heartbeat(userID, eventID int64) (*StatusView, error) {
 	return s.Status(userID, eventID)
 }
 
-// Presence dipakai SSE: sama seperti Heartbeat, tapi kalau entri sudah tidak
-// antre/belanja (mis. baru saja hangus atau checkout), tetap mengembalikan status
-// terakhirnya supaya klien tahu kenapa aliran berhenti.
+// Presence dipakai SSE: membaca posisi terbaru, dan hanya menulis last_seen_at
+// bila sudah melewati TouchInterval supaya ribuan koneksi SSE tidak membanjiri write DB.
 func (s *Service) Presence(userID, eventID int64) (*StatusView, error) {
-	if _, err := s.repo.Touch(eventID, userID, time.Now()); err != nil {
-		return nil, err
-	}
+	now := time.Now()
 	e, err := s.repo.FindLatestEntry(eventID, userID)
 	if err != nil {
 		return nil, err
 	}
 	if e == nil {
 		return nil, ErrNotInQueue
+	}
+	if (e.Status == StatusWaiting || e.Status == StatusActive) && now.Sub(e.LastSeenAt) >= TouchInterval {
+		if _, err := s.repo.Touch(eventID, userID, now); err != nil {
+			return nil, err
+		}
 	}
 	return s.view(e)
 }
@@ -195,7 +197,7 @@ func (s *Service) processEvent(eventID int64, now time.Time) (RoundResult, error
 		if err != nil {
 			return err
 		}
-		r.Expired = int(expired)
+		r.Expired = expired
 
 		// 3) Bagikan nomor. Putaran pertama setelah jam war (tail masih 0) diacak:
 		// yang datang jam 08:00 dan 13:30 punya peluang sama. Setelah itu urut waktu datang.
@@ -208,14 +210,14 @@ func (s *Service) processEvent(eventID int64, now time.Time) (RoundResult, error
 				return err
 			}
 		}
-		r.Numbered = int(numbered)
+		r.Numbered = numbered
 
 		// 4) Isi slot kosong. Contoh: batas 100, sedang belanja 97 -> 3 orang masuk.
 		active, err := s.repo.CountActive(tx, eventID)
 		if err != nil {
 			return err
 		}
-		free := st.MaxActiveSessions - int(active)
+		free := int64(st.MaxActiveSessions) - active
 		if free <= 0 {
 			return nil
 		}

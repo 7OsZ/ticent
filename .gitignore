@@ -7,3 +7,8 @@ CLAUDE.md
 docs/PRD.md
 docs/TASKS.md
 .claude/skills/product-engineering-orchestrator
+loadtest/*.json
+loadtest/*.html
+.vscode/
+.idea/
+Thumbs.db

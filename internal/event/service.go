@@ -3,6 +3,7 @@ package event
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -37,6 +38,7 @@ func NewService(repo *Repository) *Service {
 type CreateEventInput struct {
 	Name              string
 	Venue             string
+	PosterURL         *string
 	SaleStartAt       time.Time
 	MaxActiveSessions *int
 	MaxTicketsPerUser *int
@@ -66,13 +68,19 @@ func (s *Service) CreateEvent(in CreateEventInput) (*Event, error) {
 	if err := checkRange("max_tickets_per_user", tickets, minTicketsPerUser, maxTicketsPerUser); err != nil {
 		return nil, err
 	}
-	if err := checkRange("session_minutes", sessions, minSessionMinutes, maxSessionMinutes); err != nil {
+	if err := checkRange("session_minutes", minutes, minSessionMinutes, maxSessionMinutes); err != nil {
+		return nil, err
+	}
+
+	posterURL, err := normalizePosterURL(in.PosterURL)
+	if err != nil {
 		return nil, err
 	}
 
 	e := &Event{
 		Name:              name,
 		Venue:             venue,
+		PosterURL:         posterURL,
 		Status:            "draft",
 		SaleStartsAt:      in.SaleStartAt,
 		MaxActiveSessions: sessions,
@@ -290,4 +298,23 @@ func checkRange(field string, v, min, max int) error {
 func todayDate() time.Time {
 	now := time.Now().In(wib)
 	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// normalizePosterURL hanya mengizinkan URL http/https (mencegah skema berbahaya seperti javascript:).
+func normalizePosterURL(raw *string) (*string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	s := strings.TrimSpace(*raw)
+	if s == "" {
+		return nil, nil
+	}
+	if len(s) > 2048 {
+		return nil, fmt.Errorf("%w: poster_url maksimal 2048 karakter", ErrValidation)
+	}
+	u, err := url.Parse(s)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, fmt.Errorf("%w: poster_url harus berupa URL http atau https yang valid", ErrValidation)
+	}
+	return &s, nil
 }

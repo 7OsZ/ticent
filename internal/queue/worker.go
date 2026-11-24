@@ -1,8 +1,8 @@
 package queue
 
 import (
-	"context" // sinyal "berhenti" dari main.go
-	"log"
+	"context"
+	"log/slog"
 	"time"
 )
 
@@ -19,7 +19,7 @@ func NewWorker(service *Service, interval time.Duration) *Worker {
 
 // Run berjalan terus sampai ctx dibatalkan (mis. server dimatikan).
 func (w *Worker) Run(ctx context.Context) {
-	log.Printf("worker antrean berjalan, setiap %s", w.interval)
+	slog.Info("worker antrean berjalan", "interval", w.interval.String())
 
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
@@ -27,7 +27,7 @@ func (w *Worker) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("worker antrean berhenti")
+			slog.Info("worker antrean berhenti")
 			return
 		case <-ticker.C:
 			w.round()
@@ -35,13 +35,12 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
-// round menjalankan satu putaran dan mencatat hasilnya kalau ada perubahan.
 func (w *Worker) round() {
 	r, err := w.service.RunRound(time.Now())
 	if err != nil {
-		log.Println("worker antrean error:", err)
+		slog.Error("worker antrean error", "err", err)
 	}
 	if r.Numbered > 0 || r.Expired > 0 || r.Admitted > 0 {
-		log.Printf("antrean: %d dapat nomor, %d hangus, %d lolos", r.Numbered, r.Expired, r.Admitted)
+		slog.Info("putaran antrean", "numbered", r.Numbered, "expired", r.Expired, "admitted", r.Admitted)
 	}
 }

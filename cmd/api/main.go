@@ -3,55 +3,58 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"time"
 
 	"ticent/internal/auth"
 	"ticent/internal/event"
 	"ticent/internal/order"
+	"ticent/internal/payment"
 	"ticent/internal/platform/config"
 	"ticent/internal/platform/database"
 	"ticent/internal/platform/httpx"
 	"ticent/internal/queue"
+	"ticent/internal/ticket"
 
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	// config .env dipanggil dari config.load
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatal("Gagal memuat config", err)
+		slog.Error("gagal memuat config", "err", err)
+		os.Exit(1)
 	}
 
-	// Database
 	db, err := database.Open(cfg.DATABASEURL)
 	if err != nil {
-		log.Fatal("Gagal terhubung ke database", err)
+		slog.Error("gagal terhubung ke database", "err", err)
+		os.Exit(1)
 	}
-	log.Println("Berhasil terhubung ke database")
+	slog.Info("terhubung ke database")
 
-	// Migration
 	if err := database.RunMigration(cfg.DATABASEURL); err != nil {
-		log.Fatal("gagal menjalankan migrasi: ", err)
+		slog.Error("gagal menjalankan migrasi", "err", err)
+		os.Exit(1)
 	}
 
-	// router
-	server := gin.Default()
+	server := gin.New()
+	server.Use(gin.Recovery(), httpx.RequestID(), httpx.RequestLogger())
 
-	// /healthz mengecek database, bukan sekadar balas "ok".
+	// /healthz mengecek database sungguhan, bukan sekadar membalas "ok".
 	server.GET("/healthz", func(c *gin.Context) {
-		// Ambil *sql.DB dari handle GORM untuk ping.
 		sqlDB, err := db.DB()
 		if err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unavailable"})
 			return
 		}
-		// Ping pakai context milik request, jadi timeout klien ikut berlaku.
 		if err := sqlDB.PingContext(c.Request.Context()); err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unavailable"})
 			return
@@ -59,65 +62,63 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	// auth middleware
 	authMW := httpx.AuthRequired(cfg.JWTSecret)
 
-	// wiring auth
 	authRepo := auth.NewRepository(db)
 	authService := auth.NewService(authRepo, cfg.JWTSecret)
-	authHandler := auth.NewHandler(authService)
-	authHandler.RegisterRoutes(server, authMW)
+	auth.NewHandler(authService).RegisterRoutes(server, authMW)
 
 	eventRepo := event.NewRepository(db)
 	eventService := event.NewService(eventRepo)
-	eventHandler := event.NewHandler(eventService)
-	eventHandler.RegisterRoutes(server, authMW)
+	event.NewHandler(eventService).RegisterRoutes(server, authMW)
 
 	queueRepo := queue.NewRepository(db)
 	queueService := queue.NewService(queueRepo, eventService)
-	queueHandler := queue.NewHandler(queueService)
-	queueHandler.RegisterRoutes(server, authMW)
+	queue.NewHandler(queueService).RegisterRoutes(server, authMW)
 
-	// order memakai repository antrean untuk gerbang checkout (arah order -> queue).
 	orderRepo := order.NewRepository(db)
 	orderService := order.NewService(orderRepo, eventService, queueRepo)
-	orderHandler := order.NewHandler(orderService)
-	orderHandler.RegisterRoutes(server, authMW)
+	order.NewHandler(orderService).RegisterRoutes(server, authMW)
+
+	ticketRepo := ticket.NewRepository(db)
+	ticketService := ticket.NewService(ticketRepo)
+	ticket.NewHandler(ticketService).RegisterRoutes(server, authMW)
+
+	midtransGW := payment.NewMidtransGateway(cfg.MidtransServerKey, cfg.MidtransIsProduction)
+	paymentService := payment.NewService(orderRepo, orderService, queueRepo, ticketRepo, authRepo, midtransGW, cfg.MidtransServerKey)
+	payment.NewHandler(paymentService).RegisterRoutes(server, authMW)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	go order.NewWorker(orderService, 30*time.Second).Run(ctx)
-	go queue.NewWorker(queueService, queue.WorkerInterval).Run(ctx)
 
-	// 8) shortcut: route uji admin, hapus di Modul 2 saat endpoint admin asli ada
-	server.GET("/admin/ping", authMW, httpx.RequireRole("admin"), func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "admin ok"})
-	})
+	var workers sync.WaitGroup
+	workers.Go(func() { order.NewWorker(orderService, 30*time.Second).Run(ctx) })
+	workers.Go(func() { queue.NewWorker(queueService, queue.WorkerInterval).Run(ctx) })
 
-	// 9) Jalankan server
 	srv := &http.Server{
-		Addr:    ":" + cfg.HTTPPort,
-		Handler: server,
-		// Context setiap request diturunkan dari ctx. Saat Ctrl+C, koneksi SSE antrean
-		// ikut berhenti, sehingga Shutdown tidak menunggu aliran yang tidak pernah selesai.
+		Addr:              ":" + cfg.HTTPPort,
+		Handler:           server,
+		ReadHeaderTimeout: 10 * time.Second,
+		// Saat Ctrl+C, koneksi SSE antrean ikut berhenti sehingga Shutdown tidak tertahan.
 		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
 
 	go func() {
-		log.Printf("server berjalan di port %s", cfg.HTTPPort)
-		// ErrServerClosed BUKAN masalah: itu tanda server dimatikan dengan sengaja.
+		slog.Info("server berjalan", "port", cfg.HTTPPort)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatal("server berhenti: ", err)
+			slog.Error("server berhenti", "err", err)
+			os.Exit(1)
 		}
 	}()
 
 	<-ctx.Done()
-	log.Println("mematikan server...")
+	slog.Info("mematikan server")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Println("gagal mematikan server dengan rapi:", err)
+		slog.Error("gagal mematikan server dengan rapi", "err", err)
 	}
-	log.Println("server mati")
+	workers.Wait()
+	slog.Info("server mati")
 }

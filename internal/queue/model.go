@@ -54,7 +54,7 @@ func (v *StatusView) Live() bool {
 
 // RoundResult = ringkasan satu putaran worker, untuk log.
 type RoundResult struct {
-	Numbered int // entri yang baru mendapat nomor
-	Expired  int // entri yang dihanguskan (tanpa heartbeat / sesi habis)
-	Admitted int // entri yang lolos dan mulai belanja
+	Numbered int64 // entri yang baru mendapat nomor
+	Expired  int64 // entri yang dihanguskan (tanpa heartbeat / sesi habis)
+	Admitted int   // entri yang lolos dan mulai belanja
 }

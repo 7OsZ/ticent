@@ -60,6 +60,9 @@ func (s *Service) Checkout(userID int64, in CheckoutInput) (*Order, error) {
 	if err != nil {
 		return nil, err
 	}
+	if day.Event == nil {
+		return nil, ErrDayNotFound
+	}
 	ev := day.Event // data event: batas tiket per akun, jam war
 
 	// 2) Belum jam war = belum boleh beli.
@@ -96,6 +99,10 @@ func (s *Service) Checkout(userID int64, in CheckoutInput) (*Order, error) {
 		if !ok {
 			return nil, fmt.Errorf("%w: Kategori %d tidak ada", ErrValidation, it.CategoryID)
 		}
+		// Cek sebelum dijumlahkan supaya qty ekstrem tidak meluap (integer overflow) jadi negatif.
+		if it.Qty > ev.MaxTicketsPerUser || total+it.Qty > ev.MaxTicketsPerUser {
+			return nil, ErrQuotaExceeded
+		}
 
 		total += it.Qty
 		amount += c.Price * int64(it.Qty) // harga x jumlah, dijumlahkan
@@ -106,13 +113,8 @@ func (s *Service) Checkout(userID int64, in CheckoutInput) (*Order, error) {
 		})
 	}
 
-	// Total keranjang tidak boleh melebihi batas event (mis. 4).
-	if total > ev.MaxTicketsPerUser {
-		return nil, ErrQuotaExceeded
-	}
-
 	// Urutkan keranjang berdasarkan ID kategori, dari kecil ke besar.
-	sortByCategory(items)
+	SortByCategory(items)
 
 	order := &Order{
 		UserID:          userID,
@@ -184,8 +186,8 @@ func (s *Service) GetOrder(userID, orderID int64) (*Order, error) {
 	return o, nil
 }
 
-// sortByCategory mengurutkan isi order dari ID kategori terkecil ke terbesar.
-func sortByCategory(items []OrderItem) {
+// SortByCategory mengurutkan isi order dari ID kategori terkecil ke terbesar sesuai urutan kunci D-24.
+func SortByCategory(items []OrderItem) {
 	slices.SortFunc(items, func(a, b OrderItem) int {
 		return cmp.Compare(a.CategoryID, b.CategoryID)
 	})
@@ -215,7 +217,7 @@ func (s *Service) ExpireOverdue(now time.Time) (int, error) {
 	return expired, errors.Join(errs...)
 }
 
-// expireOne menghanguskan SATU order dan mengembalikan tiket + jatah belinya,
+// expireOne menghanguskan SATU order dan mengembalikan tiket + jatah belinya.
 func (s *Service) expireOne(orderID int64, now time.Time) (bool, error) {
 	done := false
 	err := s.repo.InTx(func(tx *gorm.DB) error {
@@ -228,37 +230,37 @@ func (s *Service) expireOne(orderID int64, now time.Time) (bool, error) {
 			// Order sudah dibayar atau sudah disapu duluan. Tidak ada yang perlu dikembalikan.
 			return nil
 		}
-
-		// Ambil isi order untuk tahu apa saja yang harus dikembalikan.
-		o, err := s.repo.FindOrderForRelease(tx, orderID)
-		if err != nil {
+		if err := s.ReleaseHold(tx, orderID); err != nil {
 			return err
 		}
-
-		// Tutup entri antrean: user harus antre ulang untuk mencoba lagi (D-08).
-		if err := s.queue.FinishCheckout(tx, o.UserID, o.EventID, queue.StatusExpired); err != nil {
-			return err
-		}
-
-		// Kembalikan jatah beli (jumlah semua tiket di order ini).
-		total := 0
-		for _, it := range o.Items {
-			total += it.Qty
-		}
-		if err := s.repo.ReleaseQuota(tx, o.UserID, o.EventID, total); err != nil {
-			return err
-		}
-
-		// Kembalikan stok tiap kategori, dengan urutan ID yang sama seperti Checkout.
-		sortByCategory(o.Items)
-		for _, it := range o.Items {
-			if err := s.repo.IncrementStock(tx, it.CategoryID, it.Qty); err != nil {
-				return err
-			}
-		}
-
 		done = true
 		return nil // order expired, jatah dan stok kembali
 	})
 	return done, err
+}
+
+// ReleaseHold mengembalikan slot antrean, kuota akun, dan stok kategori untuk order yang sudah dikunci
+// menjadi expired/failed di transaksi yang sama (urutan kunci D-24: queue_entries -> user_event_quota -> categories).
+func (s *Service) ReleaseHold(tx *gorm.DB, orderID int64) error {
+	o, err := s.repo.FindOrderForRelease(tx, orderID)
+	if err != nil {
+		return err
+	}
+	if err := s.queue.FinishCheckout(tx, o.UserID, o.EventID, queue.StatusExpired); err != nil {
+		return err
+	}
+	total := 0
+	for _, it := range o.Items {
+		total += it.Qty
+	}
+	if err := s.repo.ReleaseQuota(tx, o.UserID, o.EventID, total); err != nil {
+		return err
+	}
+	SortByCategory(o.Items)
+	for _, it := range o.Items {
+		if err := s.repo.IncrementStock(tx, it.CategoryID, it.Qty); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -6,6 +6,7 @@ type Event struct {
 	ID                int64     `gorm:"primaryKey" json:"id"` // BIGSERIAL -> int64
 	Name              string    `json:"name"`                 // nama event
 	Venue             string    `json:"venue"`                // lokasi
+	PosterURL         *string   `json:"poster_url"`           // URL gambar poster/hero (opsional)
 	Status            string    `json:"status"`               // 'draft' | 'published'
 	SaleStartsAt      time.Time `json:"sale_starts_at"`       // jam war dibuka
 	MaxActiveSessions int       `json:"max_active_sessions"`  // batas sesi aktif

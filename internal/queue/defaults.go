@@ -13,4 +13,7 @@ const (
 
 	// Jarak kiriman "posisi X dari Y" lewat SSE.
 	SSEInterval = 2 * time.Second
+
+	// Jarak minimal penulisan last_seen_at dari aliran SSE supaya DB tidak dihujani write tiap 2 detik.
+	TouchInterval = 20 * time.Second
 )
